@@ -655,6 +655,36 @@ class TestBuild:
         jenkins.get_build_console_output(fullname='example-job', number=1, limit=2)
         mock_response.close.assert_called_once()
 
+    def _mock_download_chunks(self, mock_session, mocker, chunks: list[bytes]):
+        mock_response = mocker.MagicMock()
+        mock_response.iter_content.return_value = iter(chunks)
+        mock_session.get.return_value = mock_response
+        return mock_response
+
+    def test_download_build_console_output(self, jenkins, mock_session, mocker, tmp_path):
+        mock_response = self._mock_download_chunks(mock_session, mocker, [b'line1\nli', b'ne2\n'])
+        path = tmp_path / 'nested' / 'console.log'
+
+        assert jenkins.download_build_console_output(fullname='example-job', number=1, path=path) == 12
+
+        assert path.read_bytes() == b'line1\nline2\n'
+        mock_session.get.assert_called_once_with(
+            'https://example.com/job/example-job/1/consoleText',
+            timeout=jenkins.timeout,
+            stream=True,
+        )
+        mock_response.__exit__.assert_called_once()
+
+    def test_download_build_console_output_http_error(self, jenkins, mock_session, mocker, tmp_path):
+        mock_response = self._mock_download_chunks(mock_session, mocker, [])
+        mock_response.raise_for_status.side_effect = HTTPError('404')
+        path = tmp_path / 'console.log'
+
+        with pytest.raises(HTTPError):
+            jenkins.download_build_console_output(fullname='example-job', number=1, path=path)
+
+        assert not path.exists()
+
     def test_stop_build(self, jenkins, mock_session):
         assert jenkins.stop_build(fullname='example-job', number=42) is None
 
@@ -1095,6 +1125,22 @@ class TestBuild:
     def test_get_build_artifact_url_nested_job(self, jenkins):
         url = jenkins.get_build_artifact_url(fullname='folder/example-job', number=42, relative_path='trace.zip')
         assert url == 'https://example.com/job/folder/job/example-job/42/artifact/trace.zip'
+
+    def test_download_build_artifact(self, jenkins, mock_session, mocker, tmp_path):
+        self._mock_download_chunks(mock_session, mocker, [bytes(range(256)), b'tail'])
+        path = tmp_path / 'artifacts' / 'trace.zip'
+
+        size = jenkins.download_build_artifact(
+            fullname='folder/example-job', number=42, relative_path='out/trace.zip', path=path
+        )
+
+        assert size == 260
+        assert path.read_bytes() == bytes(range(256)) + b'tail'
+        mock_session.get.assert_called_once_with(
+            'https://example.com/job/folder/job/example-job/42/artifact/out/trace.zip',
+            timeout=jenkins.timeout,
+            stream=True,
+        )
 
 
 class TestItem:

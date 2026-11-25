@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from requests.exceptions import HTTPError
 
@@ -92,6 +94,80 @@ async def test_get_build_console_output_no_build(mock_jenkins, mocker):
 
     with pytest.raises(ValueError, match='No build found for job: job1'):
         await build.get_build_console_output(mocker.Mock(), fullname='job1')
+
+
+def _write_download(content: bytes):
+    def download(*, path, **_kwargs: object):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return len(content)
+
+    return download
+
+
+@pytest.mark.asyncio
+async def test_download_build_console_output(mock_jenkins, mocker, tmp_path):
+    content = b'first\r\nERROR: a\nmid\rstill mid\nERROR: b\nlast\n'
+    mock_jenkins.download_build_console_output.side_effect = _write_download(content)
+    path = tmp_path / 'console.log'
+
+    result = await build.download_build_console_output(
+        mocker.Mock(), fullname='job1', number=3, path=str(path), pattern='ERROR', tail=2
+    )
+
+    assert result == {
+        'number': 3,
+        'path': str(path.resolve()),
+        'size': len(content),
+        'lineCount': 5,
+        'tail': ['ERROR: b', 'last'],
+        'matchCount': 2,
+        'matches': [{'line': 2, 'text': 'ERROR: a'}, {'line': 4, 'text': 'ERROR: b'}],
+    }
+    mock_jenkins.download_build_console_output.assert_called_once_with(fullname='job1', number=3, path=path.resolve())
+
+
+@pytest.mark.asyncio
+async def test_download_build_console_output_default_path(mock_jenkins, mocker, tmp_path):
+    mocker.patch.object(build, 'DOWNLOAD_DIR', tmp_path)
+    mock_jenkins.get_last_build_number.return_value = 7
+    mock_jenkins.download_build_console_output.side_effect = _write_download(b'only line')
+
+    result = await build.download_build_console_output(mocker.Mock(), fullname='folder/job1')
+
+    expected_path = tmp_path / 'folder' / 'job1' / '7' / 'console.log'
+    assert result == {'number': 7, 'path': str(expected_path), 'size': 9, 'lineCount': 1, 'tail': ['only line']}
+
+
+@pytest.mark.asyncio
+async def test_download_build_console_output_limits_matches_and_cuts_long_lines(mock_jenkins, mocker, tmp_path):
+    long_line = 'E' * (build.SUMMARY_LINE_LENGTH + 5)
+    content = '\n'.join(['E1', 'E2', 'E3', long_line]).encode()
+    mock_jenkins.download_build_console_output.side_effect = _write_download(content)
+
+    result = await build.download_build_console_output(
+        mocker.Mock(),
+        fullname='job1',
+        number=1,
+        path=str(tmp_path / 'console.log'),
+        pattern='E',
+        tail=1,
+        max_matches=2,
+    )
+
+    assert result['matchCount'] == 4
+    assert result['matches'] == [{'line': 1, 'text': 'E1'}, {'line': 2, 'text': 'E2'}]
+    assert result['tail'] == ['E' * build.SUMMARY_LINE_LENGTH + '... [5 more characters]']
+
+
+@pytest.mark.asyncio
+async def test_download_build_console_output_invalid_pattern(mock_jenkins, mocker, tmp_path):
+    with pytest.raises(re.error):
+        await build.download_build_console_output(
+            mocker.Mock(), fullname='job1', number=1, path=str(tmp_path / 'console.log'), pattern='('
+        )
+
+    mock_jenkins.download_build_console_output.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -543,3 +619,32 @@ async def test_get_build_artifact_url_with_number(mock_jenkins, mocker):
     mock_jenkins.get_last_build_number.assert_not_called()
     mock_jenkins.get_build_artifact_url.assert_called_once_with(fullname='job1', number=5, relative_path='report.html')
     assert result == 'https://jenkins.example.com/job/job1/5/artifact/report.html'
+
+
+@pytest.mark.asyncio
+async def test_download_build_artifact(mock_jenkins, mocker, tmp_path):
+    mock_jenkins.download_build_artifact.side_effect = _write_download(b'zipdata')
+    path = tmp_path / 'trace.zip'
+
+    result = await build.download_build_artifact(
+        mocker.Mock(), fullname='job1', relative_path='out/trace.zip', number=5, path=str(path)
+    )
+
+    assert result == {'number': 5, 'path': str(path.resolve()), 'size': 7}
+    mock_jenkins.get_last_build_number.assert_not_called()
+    mock_jenkins.download_build_artifact.assert_called_once_with(
+        fullname='job1', number=5, relative_path='out/trace.zip', path=path.resolve()
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_build_artifact_default_path(mock_jenkins, mocker, tmp_path):
+    mocker.patch.object(build, 'DOWNLOAD_DIR', tmp_path)
+    mock_jenkins.get_last_build_number.return_value = 2
+    mock_jenkins.download_build_artifact.side_effect = _write_download(b'zipdata')
+
+    result = await build.download_build_artifact(mocker.Mock(), fullname='job1', relative_path='out/trace.zip')
+
+    expected_path = tmp_path / 'job1' / '2' / 'artifacts' / 'out' / 'trace.zip'
+    assert result == {'number': 2, 'path': str(expected_path), 'size': 7}
+    assert expected_path.read_bytes() == b'zipdata'

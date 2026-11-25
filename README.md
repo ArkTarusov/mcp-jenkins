@@ -169,6 +169,7 @@ Note: this is a liveness check only — it does not verify connectivity to the u
 | `get_build`                | Get a specific build by job name and build number.  |
 | `get_build_scripts`        | Get scripts associated with a specific build.       |
 | `get_build_console_output` | Get the console output of a specific build.         |
+| `download_build_console_output` | Save the console output of a build to a local file; returns a summary. |
 | `get_build_parameters`     | Get the parameters of a specific build.             |
 | `get_build_test_report`    | Get the test report of a specific build.            |
 | `get_build_test_failures`  | Get the failing tests of a specific build.          |
@@ -179,6 +180,7 @@ Note: this is a liveness check only — it does not verify connectivity to the u
 | `get_all_build_artifacts`  | List the artifacts of a specific build.             |
 | `get_build_artifact`       | Download an artifact from a specific build.         |
 | `get_build_artifact_url`   | Get the direct URL of an artifact from a specific build. |
+| `download_build_artifact`  | Save an artifact of a build to a local file; returns its path and size. |
 | `get_view`                 | Get a specific view by name.                        |
 | `get_all_views`            | Get the configuration of a specific view.           |
 | `get_all_plugins`          | Get all installed plugins.                        |

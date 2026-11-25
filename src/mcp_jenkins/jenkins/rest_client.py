@@ -1,6 +1,7 @@
 import json
 import re
 from functools import reduce
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
@@ -363,6 +364,20 @@ class Jenkins:
         response.close()
         return '\n'.join(matched)
 
+    def download_build_console_output(self, *, fullname: str, number: int, path: Path) -> int:
+        """Stream the full console output of a specific build into a file.
+
+        Args:
+            fullname: The fullname of the job.
+            number: The build number.
+            path: The file to write; missing parent directories are created, an existing file is overwritten.
+
+        Returns:
+            The number of bytes written.
+        """
+        job_path = self._job_path(fullname)
+        return self._download(rest_endpoint.BUILD_CONSOLE_OUTPUT(job_path=job_path, number=number), path)
+
     def stop_build(self, *, fullname: str, number: int) -> None:
         """Stop a running Jenkins build.
 
@@ -627,6 +642,36 @@ class Jenkins:
         return self.endpoint_url(
             rest_endpoint.BUILD_ARTIFACT(job_path=job_path, number=number, relative_path=relative_path),
         )
+
+    def download_build_artifact(self, *, fullname: str, number: int, relative_path: str, path: Path) -> int:
+        """Stream a specific artifact of a build into a file.
+
+        Args:
+            fullname: The fullname of the job.
+            number: The build number.
+            relative_path: The relative path of the artifact.
+            path: The file to write; missing parent directories are created, an existing file is overwritten.
+
+        Returns:
+            The number of bytes written.
+        """
+        job_path = self._job_path(fullname)
+        return self._download(
+            rest_endpoint.BUILD_ARTIFACT(job_path=job_path, number=number, relative_path=relative_path), path
+        )
+
+    def _download(self, endpoint: str, path: Path) -> int:
+        response = self._session.get(self.endpoint_url(endpoint), timeout=self.timeout, stream=True)
+        response.raise_for_status()
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        size = 0
+        with response, path.open('wb') as file:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                file.write(chunk)
+                size += len(chunk)
+
+        return size
 
     def get_running_builds(self) -> list[Build]:
         """Get all running builds across all nodes.

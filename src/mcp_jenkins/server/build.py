@@ -1,4 +1,7 @@
 import base64
+import re
+from collections import deque
+from pathlib import Path
 from typing import Literal
 
 from fastmcp import Context
@@ -7,6 +10,44 @@ from requests.exceptions import HTTPError
 from mcp_jenkins.core.lifespan import jenkins
 from mcp_jenkins.jenkins import Jenkins, PendingInputsUnavailableError
 from mcp_jenkins.server import mcp
+
+DOWNLOAD_DIR = Path.home() / '.mcp-downloads' / 'jenkins'
+
+# Build tools such as xcodebuild print single lines of several thousand characters,
+# so lines quoted in a download summary are cut to this length.
+SUMMARY_LINE_LENGTH = 1000
+
+
+def _cut_line(line: str) -> str:
+    if len(line) <= SUMMARY_LINE_LENGTH:
+        return line
+    return f'{line[:SUMMARY_LINE_LENGTH]}... [{len(line) - SUMMARY_LINE_LENGTH} more characters]'
+
+
+def _summarize_log(path: Path, pattern: re.Pattern | None, tail: int, max_matches: int) -> dict:
+    """Count the lines of a saved log and collect its last lines and the lines matching a pattern
+
+    Lines are split on '\\n' only, so the line numbers match the ones grep and editors show for the file.
+    """
+    last_lines: deque[str] = deque(maxlen=tail)
+    matches: list[dict] = []
+    match_count = 0
+    line_count = 0
+
+    with path.open(encoding='utf-8', errors='replace', newline='\n') as file:
+        for line_count, raw_line in enumerate(file, start=1):
+            line = raw_line.rstrip('\r\n')
+            last_lines.append(line)
+            if pattern is not None and pattern.search(line):
+                match_count += 1
+                if len(matches) < max_matches:
+                    matches.append({'line': line_count, 'text': _cut_line(line)})
+
+    summary = {'lineCount': line_count, 'tail': [_cut_line(line) for line in last_lines]}
+    if pattern is not None:
+        summary['matchCount'] = match_count
+        summary['matches'] = matches
+    return summary
 
 
 def _resolve_build_number(client: Jenkins, fullname: str, number: int | None) -> int:
@@ -96,6 +137,49 @@ async def get_build_console_output(
     return jenkins(ctx).get_build_console_output(
         fullname=fullname, number=number, pattern=pattern, offset=offset, limit=limit
     )
+
+
+@mcp.tool(tags=['read'])
+async def download_build_console_output(
+    ctx: Context,
+    fullname: str,
+    number: int | None = None,
+    path: str | None = None,
+    pattern: str | None = None,
+    tail: int = 50,
+    max_matches: int = 100,
+) -> dict:
+    """Save the full console output of a specific build in Jenkins to a local file
+
+    Use it instead of get_build_console_output when the log may be large: the whole log goes to the file and
+    only a short summary is returned, so read or search the file afterwards.
+
+    Args:
+        fullname: The fullname of the job
+        number: The number of the build, if None, get the last build
+        path: The file to write, if None, ~/.mcp-downloads/jenkins/<fullname>/<number>/console.log
+        pattern: Optional regex pattern, the matching lines are returned with their 1-based line numbers
+        tail: Number of last lines of the log to return
+        max_matches: Maximum number of matching lines to return
+
+    Returns:
+        A dict with the build number, the absolute path of the file, its size in bytes, its line count,
+        its last lines and, when a pattern is given, the match count and the first matching lines.
+        Returned lines are cut to 1000 characters.
+    """
+    compiled = re.compile(pattern) if pattern else None
+    client = jenkins(ctx)
+    number = _resolve_build_number(client, fullname, number)
+    file_path = Path(path).expanduser().resolve() if path else DOWNLOAD_DIR / fullname / str(number) / 'console.log'
+
+    size = client.download_build_console_output(fullname=fullname, number=number, path=file_path)
+
+    return {
+        'number': number,
+        'path': str(file_path),
+        'size': size,
+        **_summarize_log(file_path, compiled, tail, max_matches),
+    }
 
 
 @mcp.tool(tags=['read'])
@@ -374,3 +458,34 @@ async def get_build_artifact_url(ctx: Context, fullname: str, relative_path: str
     number = _resolve_build_number(jenkins(ctx), fullname, number)
 
     return jenkins(ctx).get_build_artifact_url(fullname=fullname, number=number, relative_path=relative_path)
+
+
+@mcp.tool(tags=['read'])
+async def download_build_artifact(
+    ctx: Context, fullname: str, relative_path: str, number: int | None = None, path: str | None = None
+) -> dict:
+    """Save an artifact of a specific build in Jenkins to a local file
+
+    Use it instead of get_build_artifact when the artifact may be large or binary: only the path and the size
+    are returned.
+
+    Args:
+        fullname: The fullname of the job
+        relative_path: The relative path of the artifact (e.g. playwright-report/index.html)
+        number: The number of the build, if None, get the last build
+        path: The file to write, if None, ~/.mcp-downloads/jenkins/<fullname>/<number>/artifacts/<relative_path>
+
+    Returns:
+        A dict with the build number, the absolute path of the file and its size in bytes
+    """
+    client = jenkins(ctx)
+    number = _resolve_build_number(client, fullname, number)
+    file_path = (
+        Path(path).expanduser().resolve()
+        if path
+        else DOWNLOAD_DIR / fullname / str(number) / 'artifacts' / relative_path
+    )
+
+    size = client.download_build_artifact(fullname=fullname, number=number, relative_path=relative_path, path=file_path)
+
+    return {'number': number, 'path': str(file_path), 'size': size}
