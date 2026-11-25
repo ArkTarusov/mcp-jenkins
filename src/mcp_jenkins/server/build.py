@@ -13,8 +13,7 @@ from mcp_jenkins.server import mcp
 
 DOWNLOAD_DIR = Path.home() / '.mcp-downloads' / 'jenkins'
 
-# Build tools such as xcodebuild print single lines of several thousand characters,
-# so lines quoted in a download summary are cut to this length.
+# xcodebuild and similar tools print single lines of several thousand characters.
 SUMMARY_LINE_LENGTH = 1000
 
 
@@ -25,15 +24,12 @@ def _cut_line(line: str) -> str:
 
 
 def _summarize_log(path: Path, pattern: re.Pattern | None, tail: int, max_matches: int) -> dict:
-    """Count the lines of a saved log and collect its last lines and the lines matching a pattern
-
-    Lines are split on '\\n' only, so the line numbers match the ones grep and editors show for the file.
-    """
     last_lines: deque[str] = deque(maxlen=tail)
     matches: list[dict] = []
     match_count = 0
     line_count = 0
 
+    # Split on '\n' only, as grep does: a lone '\r' from progress output must not shift line numbers.
     with path.open(encoding='utf-8', errors='replace', newline='\n') as file:
         for line_count, raw_line in enumerate(file, start=1):
             line = raw_line.rstrip('\r\n')
