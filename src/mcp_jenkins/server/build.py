@@ -17,6 +17,15 @@ DOWNLOAD_DIR = Path.home() / '.mcp-downloads' / 'jenkins'
 SUMMARY_LINE_LENGTH = 1000
 
 
+def _check_local_transport(ctx: Context, alternative: str) -> None:
+    if ctx.transport in ('sse', 'streamable-http'):
+        msg = (
+            f'Saving to a file needs mcp-jenkins to run on the client machine (stdio transport); with the '
+            f'{ctx.transport} transport the file would stay on the server disk. Use {alternative} instead.'
+        )
+        raise ValueError(msg)
+
+
 def _cut_line(line: str) -> str:
     if len(line) <= SUMMARY_LINE_LENGTH:
         return line
@@ -149,6 +158,7 @@ async def download_build_console_output(
 
     Use it instead of get_build_console_output when the log may be large: the whole log goes to the file and
     only a short summary is returned, so read or search the file afterwards.
+    Only available with the stdio transport: the file is written on the machine running this server.
 
     Args:
         fullname: The fullname of the job
@@ -163,6 +173,7 @@ async def download_build_console_output(
         its last lines and, when a pattern is given, the match count and the first matching lines.
         Returned lines are cut to 1000 characters.
     """
+    _check_local_transport(ctx, 'get_build_console_output with pattern, offset and limit')
     compiled = re.compile(pattern) if pattern else None
     client = jenkins(ctx)
     number = _resolve_build_number(client, fullname, number)
@@ -463,7 +474,7 @@ async def download_build_artifact(
     """Save an artifact of a specific build in Jenkins to a local file
 
     Use it instead of get_build_artifact when the artifact may be large or binary: only the path and the size
-    are returned.
+    are returned. Only available with the stdio transport: the file is written on the machine running this server.
 
     Args:
         fullname: The fullname of the job
@@ -474,6 +485,7 @@ async def download_build_artifact(
     Returns:
         A dict with the build number, the absolute path of the file and its size in bytes
     """
+    _check_local_transport(ctx, 'get_build_artifact or get_build_artifact_url')
     client = jenkins(ctx)
     number = _resolve_build_number(client, fullname, number)
     file_path = (

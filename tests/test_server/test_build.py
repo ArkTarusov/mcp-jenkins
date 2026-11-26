@@ -171,6 +171,22 @@ async def test_download_build_console_output_invalid_pattern(mock_jenkins, mocke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('transport', ['sse', 'streamable-http'])
+async def test_download_tools_refused_on_remote_transport(mock_jenkins, mocker, tmp_path, transport):
+    ctx = mocker.Mock(transport=transport)
+
+    with pytest.raises(ValueError, match=f'with the {transport} transport'):
+        await build.download_build_console_output(ctx, fullname='job1', number=1, path=str(tmp_path / 'console.log'))
+    with pytest.raises(ValueError, match=f'with the {transport} transport'):
+        await build.download_build_artifact(
+            ctx, fullname='job1', relative_path='out/trace.zip', number=1, path=str(tmp_path / 'trace.zip')
+        )
+
+    mock_jenkins.download_build_console_output.assert_not_called()
+    mock_jenkins.download_build_artifact.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_build_test_reports(mock_jenkins, mocker):
     mock_jenkins.get_last_build_number.return_value = 1
     mock_jenkins.get_build_test_report.return_value = {'reports': ['report1', 'report2']}
